@@ -75,6 +75,46 @@ sudo make install
 
 
 
+### 终端代理`polipo`：
+
+```shell
+sudo apt install polipo
+sudo vim /etc/polipo/config
+```
+并添加以下内容，然后重启`polipo`
+```shell
+socksParentProxy = "localhost:1080"
+socksProxyType = socks5
+```
+```shell
+ sudo service polipo restart
+```
+在终端中添加以下命令，可以在当前终端实现代理
+```shell
+export http_proxy="http://127.0.0.1:8124"
+export https_proxy="http://127.0.0.1:8124"
+```
+但强烈建议设置快捷键如下，即可在命令前实现代理
+```shell
+vim ～./bashrc
+```
+```shell
+alias hp='export http_proxy=http://localhost:8123 && export https_proxy=http://localhost:8123 &&'
+```
+即可使用以下命令。如：
+```shell
+hp curl ip.GS
+```
+也可以在`./bashrc`中直接添加以下命令以实现全局代理。
+```shell
+export http_proxy="http://127.0.0.1:8124"
+export https_proxy="http://127.0.0.1:8124"
+```
+### chrome代理：
+首先需要下载[SwitchyOmega](https://github.com/FelisCatus/SwitchyOmega),
+下载crx版，直接将crx后缀改为zip然后，在setting中打开开发者模式，将zip文件拖进去。
 
 
-   
+
+
+​																														
