@@ -38,6 +38,8 @@ $ sudo ldconfig
 
 对于OPENCV_EXTRA_MODULES_PATH选项会安装opencv的额外库文件,有可能会出下载文件,若长时间没有下载速度,可尝试手动下载,并修改对应的
 
+最方便的办法是终端翻墙
+
 ```   shell
 $ gedit opencv_contrib/modules/faceCMakeLists.txt
 ```
