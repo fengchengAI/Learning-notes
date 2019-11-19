@@ -7,7 +7,7 @@ $ sudo apt install -y build-essential cmake git pkg-config libgtk2.0-dev libopen
 $ sudo apt install -y gfortran libblas-dev liblapack-dev libeigen3-dev 
 $ sudo apt install -y Python-dev python-numpy libtbb2 libtbb-dev libjpeg-dev libpng-dev libtiff-dev libdc1394-22-dev libjasper-dev 
 $ sudo apt install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
-$ sudo apt install -y libavcodec-dev libavformat-dev libswscale-dev libavutil-dev libavresample-dev libxvidcore-dev libx264-de
+$ sudo apt install -y libavcodec-dev libavformat-dev libswscale-dev libavutil-dev libavresample-dev libxvidcore-dev libx264-dev
 ```
 
 官网下载最新版本的[opencv](https://github.com/opencv/opencv/archive/4.0.1.zip)和[opencv_contrib](https://github.com/opencv/opencv_contrib/archive/4.0.1.zip)源码压缩包。并解压到同一文件夹下。
