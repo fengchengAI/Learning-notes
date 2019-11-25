@@ -210,3 +210,38 @@ def int2(x, base=2):
 int2 = functools.partial(int, base=2)
 ```
 
+
+
+
+
+# multiprocessing
+
+多线程
+
+
+
+```
+
+with Manager() as manager:
+     index = 0
+     l = manager.list()
+     num = multiprocessing.cpu_count()
+     p = Pool(num)
+     #lock = Lock()
+     for i in root.iterdir():
+         for j in i.iterdir():
+             '''
+             index = index+1
+
+             if index % num == 0:
+                 p.close()
+                 # 进程池对象调用join，会等待进程吃中所有的子进程结束完毕再去结束父进程
+                 p.join()
+                 p = Pool(num)
+             else:
+             '''
+             p.apply_async(run, args=(i.name, j.stem))
+     p.close()
+     # 进程池对象调用join，会等待进程吃中所有的子进程结束完毕再去结束父进程
+     p.join()
+```
