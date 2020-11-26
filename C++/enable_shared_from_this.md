@@ -20,10 +20,19 @@ shared_ptr<int> ptr1(p);
 shared_ptr<int> ptr2(p);
 cout<<ptr1.use_count()<<endl;
 cout<<ptr2.use_count()<<endl;
-12345
+
+
+//类似一样
+int *p = new int;
+shared_ptr<int> ptr1(p);
+shared_ptr<int> ptr2(ptr1.get());  // ptr1.get() == p
+cout<<ptr1.use_count()<<endl;
+cout<<ptr2.use_count()<<endl;
+
+
 ```
 
-这段代码就有问题了，因为shared_ptr ptr1( p )和shared_ptr ptr2( p )**都调用了shared_ptr的构造函数**，在它的构造函数中，**都重新开辟了引用计数的资源**，导致ptr1和ptr2都记录了一次new int的引用计数，都是1，析构的时候它俩都去释放内存资源，导致释放逻辑错误，如下图所示：
+这段代码就有问题了，因为shared_ptr ptr1( p )和shared_ptr ptr2( p )**都调用了shared_ptr的构造函数**，在它的构造函数中，**都重新开辟了引用计数的资源**，导致ptr1和ptr2都记录了一次new int的引用计数，都是1，析构的时候它俩都去释放内存资源，导致释放逻辑错误：
 
 
 
@@ -72,8 +81,10 @@ int main()
 
 **代码运行打印如下**：
 
+这里为什么只有一个A() ，因为只有一个构造函数，构造函数即是new A()；
+
 ```
-A()
+A()  
 1
 1
 ~A()

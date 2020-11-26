@@ -758,7 +758,7 @@ PriorityCustomer&
 PriorityCustomer::operator=(const PriorityCustomer& rhs)
 {
 logCall("PriorityCustomer copy assignment operator");
-Customer::operator=(rhs);
+Customer::operator=(rhs); //应该调用父类复制函数
  // assign base class parts
 priority = rhs.priority;
 return *this;
@@ -766,8 +766,155 @@ return *this;
 
 ```
 
+
+
+* 复制所有的成员值。包括其父类的成员。
+
+* 不要在拷贝构造函数中调用构造函数，因为此时构造函数不一定存在
+
 * 有时候拷贝构造与赋值构造很相似，但不建议在赋值构造中调用拷贝构造。可以再提供一个private函数如init, 然后在两个构造函数中使用（将相似部分写进init）
 
-  ### 上面这个解释是，在赋值构造中，拷贝构造不一定存在？？？ Why
+  ### Item 13: Use objects to manage resources.
 
+  ```c++
+  class Investment { ... };
+  Investment* createInvestment();
+  // return ptr to dynamically allocated
+  // object in the Investment hierarchy;
+  // the caller must delete it
+  // (parameters omitted for simplicity)
+  void f()
+  {
+  Investment *pInv = createInvestment(); // call factory function
+  ... // use pInv
+  delete pInv; // release object
+  }
+  //因为很可能...中有异常或者有return语句，使得函数没有执行delete而导致内存泄露
+  ```
   
+  此时的一个方法是：把资源放进对象中，当对象作用域消失时会自动调用其析构函数。
+  
+  ```c++
+  void f()
+  {
+  ...
+  std::tr1::shared_ptr<Investment>
+  pInv(createInvestment());
+  ...
+  }
+  ```
+  
+  
+
+## Item 14: Think carefully about copying behavior in resource-managing classes.
+
+```c++
+void lock(Mutex *pm); // lock mutex pointed to by pm
+void unlock(Mutex *pm); // unlock the mutex
+
+// 建立一个class来管理Mutex
+class Lock {
+    public:
+    explicit Lock(Mutex *pm)
+    : mutexPtr(pm)
+    { lock(mutexPtr); } // acquire resource
+    ~Lock() { unlock(mutexPtr); } // release resource
+    private:
+    Mutex *mutexPtr;
+};
+
+//我们会这样使用
+Mutex m;
+...
+
+{
+    // create block to define critical section
+    Lock ml(&m);   // lock the mutex
+    ... // perform critical section operations
+} // automatically unlock mutex at end of block
+//但是当发生Mutex资源复制时候,如
+Lock ml1(&m); // lock m
+Lock ml2(ml1); // copy ml1 to ml2—what should happen here?
+
+方法1：
+    禁止复制行为，如private copying操作
+方法2：   
+    
+class Lock {
+  public:
+    explicit Lock(Mutex *pm) // init shared_ptr with the Mutex
+    : mutexPtr(pm, unlock) // to point to and the unlock func as the deleter 
+    { 
+    lock(mutexPtr.get());  // see Item 15 for info on "get"
+    }
+  private:
+    std::tr1::shared_ptr<Mutex> mutexPtr;  // use shared_ptr instead of raw pointer
+};
+//这里不需要定义析构函数，因为析构函数会自动调用非静态成员的析构函数，于是mutexPtr的析构函数会调用unlock方法
+
+```
+
+## Item 15: Provide access to raw resources in resource-managing classes.
+
+一些API使用原始的接口（指针）而不是资源管理类，所以应该提供对原始资源访问的接口。如shared_ptr中的get一样。
+
+```c++
+//如下FontHandle作为原始资源，Font对其进行了封装
+FontHandle getFont();  // from C API—params omitted for simplicity
+void releaseFont(FontHandle fh); // from the same C API RAII class
+class Font {
+   public:
+    explicit Font(FontHandle fh) // acquire resource;
+    : f(fh) // use pass-by-value, because the C API doesnewed
+    {} 
+    FontHandle get() const { return f; } // explicit conversion function
+    ~Font() { releaseFont(f); } // release resource
+   private:
+    FontHandle f; // the raw font resource
+};
+//访问如下
+void changeFontSize(FontHandle f, int newSize);
+// from the C API
+Font f(getFont());
+int newFontSize;
+changeFontSize(f.get() , newFontSize);
+// 这是显式调用get方法，还有隐式的。但是显式更加安全，只是需要手动调用get方法
+```
+
+## Item 16: Use the same form in corresponding uses of new and delete .
+
+```c++
+std::string *stringPtr1 = new std::string;
+std::string *stringPtr2 = new std::string[100];
+delete stringPtr1;
+delete [] stringPtr2;
+```
+
+TODO 
+
+shared_ptr p(new int[10]); 默认调用delete删除器，而不是delete [] ，所有会资源泄露。事实上资源管理类中，应使用vector，string等数组，而非原始数组。
+
+## Item 17: Store newed objects in smart pointers in standalone statements.
+
+```c++
+//以独立语句将newed的对象放入智能指针里面
+//对于如下的两个函数
+int priority();
+void processWidget(std::tr1::shared_ptr<Widget> pw, int priority);
+// 其有可能的一个调用方法是，但是这样有可能会造成资源浪费。
+processWidget( std::shared_ptr<Widget>( new Widget ) , priority());
+//在调用processWidget之前会准备实参，于是会先进行
+Call priority.
+Execute "new Widget".
+Call the shared_ptr constructor
+//这个顺序只能保证   Execute "new Widget".在Call the shared_ptr constructor的前面，其他不能保证
+// 于是有可能会出现
+1. Execute "new Widget".
+2. Call priority.
+3. Call the tr1::shared_ptr constructor.
+//但是假设Call priority.异常，此时"new Widget".并没有被资源管理类进行包裹，于是资源浪费。
+//于是可以改成
+std::shared_ptr<Widget> pw(new Widget); // store newed object in a smart pointer in a  standalone statement
+processWidget( pw , priority()); // this call won't leak    
+```
+

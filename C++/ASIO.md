@@ -566,17 +566,20 @@ int main(int argc, char* argv[])
 
     //保证ip :: udp :: resolver :: resolve（）函数在不失败的情况下至少返回列表中的一个端点。 这意味着直接取消引用返回值是安全的。
     udp::socket socket(io_context);
-    socket.open(udp::v4());
+    socket.open(udp::v4());  //UDP 和TCP最大的差别就是这里不是connect，而是open
+      
+    // 实际上可以将上面改为 udp::socket socket(io_context, udp::v4());
     boost::array<char, 1> send_buf  = { '0' };
-        std::string s = "123";
-        socket.send_to(boost::asio::buffer(s), receiver_endpoint);
-        boost::array<char, 128> recv_buf;
-        udp::endpoint sender_endpoint;
-        //由于UDP是面向数据报的，因此我们将不使用流套接字。 创建一个ip :: udp :: socket并启动与远程端点的联系。
-        //现在，我们需要准备好接受服务器发回给我们的任何内容。 接收服务器响应的端点将通过ip :: udp :: socket :: receive_from（）进行初始化。
+      std::string s = "123";
+      socket.send_to(boost::asio::buffer(s), receiver_endpoint);
+      boost::array<char, 128> recv_buf;
+      udp::endpoint sender_endpoint;
+      //由于UDP是面向数据报的，因此我们将不使用流套接字。 创建一个ip :: udp :: socket并启动与远程端点的联系。
+      //现在，我们需要准备好接受服务器发回给我们的任何内容。 接收服务器响应的端点将通过ip :: udp :: socket :: receive_from（）进行初始化。
+      
+	  udp::endpoint remote_endpoint;  
 
-        size_t len = socket.receive_from(
-        boost::asio::buffer(recv_buf), sender_endpoint);
+      size_t len = socket.receive_from(boost::asio::buffer(recv_buf), remote_endpoint);
 
     std::cout.write(recv_buf.data(), len);
   }
@@ -614,10 +617,11 @@ int main()
   try
   {
     boost::asio::io_context io_context;
-
     udp::socket socket(io_context, udp::endpoint(udp::v4(), 13));
 //等待客户开始与我们联系。 remote_endpoint对象将由ip :: udp :: socket :: receive_from（）填充。
-    for (;;)
+ // TCP有tcp::acceptor acceptor(...)，因为tcp面向连接
+
+      for (;;)
     {
       boost::array<char, 1> recv_buf;
       udp::endpoint remote_endpoint;
@@ -641,7 +645,7 @@ int main()
 
 client中的socket.send_to(boost::asio::buffer(s), receiver_endpoint); 和server中的socket.receive_from(boost::asio::buffer(recv_buf), remote_endpoint);是什么？为什么无法打印出来
 
-[ An asynchronous UDP daytime server](https://www.boost.org/doc/libs/1_73_0/doc/html/boost_asio/tutorial/tutdaytime6.html)
+## [ An asynchronous UDP daytime server](https://www.boost.org/doc/libs/1_73_0/doc/html/boost_asio/tutorial/tutdaytime6.html)
 
 ```cpp
 #include <ctime>
@@ -724,3 +728,173 @@ int main()
   return 0;
 }
 ```
+
+
+
+
+
+### buffers/reference_counted
+
+这个清单中async_write的buffer为shared_const_buffer，该shared_const_buffer类将原来的char * 包装为boost::asio::const_buffer，并重写begin（），和end（）方法。
+
+实际上，boost::asio::const_buffer包装了原始数据，因为这是写入，所以buffer是const的，可以声明为const
+
+```cpp
+#include <boost/asio.hpp>
+#include <iostream>
+#include <memory>
+#include <utility>
+#include <vector>
+#include <ctime>
+
+using boost::asio::ip::tcp;
+
+// A reference-counted non-modifiable buffer class.
+class shared_const_buffer
+{
+public:
+  // Construct from a std::string.
+  explicit shared_const_buffer(const std::string& data)
+    : data_(new std::vector<char>(data.begin(), data.end())),
+      buffer_(boost::asio::buffer(*data_))
+  {
+  }
+
+  // Implement the ConstBufferSequence requirements.
+  const boost::asio::const_buffer* begin() const { return &buffer_; }
+  const boost::asio::const_buffer* end() const { return &buffer_ + 1; }
+
+private:
+  std::shared_ptr<std::vector<char> > data_;
+  boost::asio::const_buffer buffer_;
+};
+
+class session
+  : public std::enable_shared_from_this<session>
+{
+public:
+  session(tcp::socket socket)
+    : socket_(std::move(socket))
+  {
+  }
+
+  void start()
+  {
+    do_write();
+  }
+
+private:
+  void do_write()
+  {
+    std::time_t now = std::time(0);
+    shared_const_buffer buffer(std::ctime(&now));
+
+    auto self(shared_from_this());
+    boost::asio::async_write(socket_, buffer,
+        [self](boost::system::error_code /*ec*/, std::size_t /*length*/)
+        {
+        });
+  }
+
+  // The socket used to communicate with the client.
+  tcp::socket socket_;
+};
+
+class server
+{
+public:
+  server(boost::asio::io_context& io_context, short port)
+    : acceptor_(io_context, tcp::endpoint(tcp::v4(), port))
+  {
+    do_accept();
+  }
+
+private:
+  void do_accept()
+  {
+    acceptor_.async_accept(
+        [this](boost::system::error_code ec, tcp::socket socket)
+        {
+          if (!ec)
+          {
+            std::make_shared<session>(std::move(socket))->start();
+          }
+
+          do_accept();
+        });
+  }
+
+  tcp::acceptor acceptor_;
+};
+
+int main(int argc, char* argv[])
+{
+  try
+  {
+    if (argc != 2)
+    {
+      std::cerr << "Usage: reference_counted <port>\n";
+      return 1;
+    }
+
+    boost::asio::io_context io_context;
+
+    server s(io_context, std::atoi(argv[1]));
+
+    io_context.run();
+  }
+  catch (std::exception& e)
+  {
+    std::cerr << "Exception: " << e.what() << "\n";
+  }
+
+  return 0;
+}
+```
+
+实际上可以将do_write改为以下，这样就不需要自定义shared_const_buffer类了。
+
+```cpp
+  void do_write()
+  {
+    std::time_t now = std::time(0);
+    auto time = std::ctime(&now);
+
+    auto self(shared_from_this());
+   
+    auto asd = boost::asio::const_buffer(time, std::strlen(time));
+    boost::asio::async_write(socket_, asd,
+        [self](boost::system::error_code /*ec*/, std::size_t /*length*/)
+        {
+        });
+  }
+```
+
+
+
+ASIO 中的buffer只有两种，即mutable_buffer和const_buffer，都支持
+
+
+mutable_buffer buffer ( void * data, std::size_t size_in_bytes);
+const_buffer buffer (const  void * data, std::size_t size_in_bytes);
+实际上可以直接根据data是否是底层const指针自动判断类型。
+
+
+
+
+
+TCP 有read，write
+
+UDP和icmp 是send和receive
+
+ // TCP的tcp::acceptor acceptor(...)，实际上就是进行握手操作，而UDP和icmp 不需要
+
+实际上socket的local_endpoint都是隐式绑定的，只有当connect的时候才会有remote_endpoint
+
+因为UDP，ICMP都是面向无连接的所以使用connect也没有remote_endpoint,但是却可以隐式指定目标端口，就不需要进行send_to , 可以使用send
+
+实际上receive_from（boost::asio::buffer(), remote_endpoint)) 会将发送端的endpoint信息写入
+
+remote_endpoint中。
+
+在asynchronous UDP client和server中为什么是client先给server发数据然后再接受，因为只有发送过去了，server才可以使用receive_from来记录client的endpoint，然后再将真实数据发送给client。 
