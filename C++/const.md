@@ -37,6 +37,11 @@ int const  *p_a = &num_a; //底层const  等价于const int *p_a = &num_a;
 int num_b = 2;
 int *const p_b = &num_b; //顶层const
 //p_b = &num_a;  //错误，常量指针不能改变存储的地址值
+// 注意下
+const int a = 2;
+int *const b = &a; // error
+//因为a是一个int类型，b是一个指向int的const指针，所以就需要将const int转化为int，这会报错。可以改为
+const int *const b = &a;
 ```
 
 ## 区分顶层const和底层const的作用
