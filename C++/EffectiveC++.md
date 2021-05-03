@@ -1,3 +1,5 @@
+[博客园](https://www.cnblogs.com/jerry19880126/p/3308752.html)
+
 ### Item 1: View C++ as a federation of languages
 
 首先C++，是一個语言集合
@@ -69,6 +71,23 @@ const修饰指针变量时：（顶层与底层const）
 
  如果函数返回值采用“值传递方式”，由于函数会把返回值复制到外部临时的存储单元中，加const 修饰没有任何价值。所以，**对于值传递来说，加const没有太多意义。**
 
+#### const 强大地方在于，const可以修饰参数，返回值，函数本身。
+
+1. 函数返回一个const，通常可以降低一些错误。如
+
+```c++
+Class Rational;表示一个有理数
+const Rational operator*( const Rational &lhs, const Rational &rhs);
+Rational a,b,c;
+(a*b) = c;//这是一个没有意义的操作。所以operator*必须返回一个const
+```
+
+const成员函数。两个理由使用const函数。
+
+1. 可以知道哪个函数可以改变class资源，哪个不可以
+2. 可以操作const对象。
+3. 最重要的是两个函数如果只是函数const不同，可以被重载
+
 ```c++
 class TextBlock {
     public:
@@ -80,10 +99,10 @@ class TextBlock {
     private:
    	 std::string text;
 };
-TextBlock tb("Hello");
-std::cout << tb[0];
+TextBlock tb("Hello");  
+std::cout << tb[0];  //调用char& operator[](std::size_t position)
 const TextBlock ctb("World");
-std::cout << ctb[0];
+std::cout << ctb[0];  //调用const char& operator[](std::size_t position) const
 tb[0] = 'x';
 ctb[0] = 'x'; // error ，因为ctb返回的是一个const，所以无法进行修改
  
@@ -104,6 +123,56 @@ char *pc = &cctb[0];
 *pc = 'J';
 // cctb是一个常对象，但是最后的值缺被修改了
 ```
+
+此外注意non-constoperator[]的返回值一定是&。
+
+
+
+* 避免non-const与const的重复
+
+```c++
+class TextBlock {
+public:
+...
+const char& operator[](std::size_t position) const
+{
+... // do bounds checking  
+... // log access data
+... // verify data integrity
+return text[position];
+}
+char& operator[](std::size_t position)
+{
+... // do bounds checking
+... // log access data
+... // verify data integrity
+return text[position];
+}
+private:
+std::string text;
+};
+//上面俩那个函数除了函数本身属性不同和返回值不同，其他一样，这就是代码重复。可以改为
+class TextBlock {
+public:
+...
+const char& operator[](std::size_t position) const
+// same as before
+{
+...
+...
+...
+return text[position];
+}
+char& operator[](std::size_t position)
+{
+	return const_cast <char&>(static_cast <const TextBlock&>(*this)[position]);
+}
+//注意到non-const调用了const。有两层转换，
+//第一层将（*this）转为const对象，这样就可以调用const char& operator[](std::size_t position) const，然后将const char& operator[](std::size_t position) const的返回值去除const属性，即const_cast转换。
+// 不可以用const调用non-const函数，因为non-const可能会对函数进行修改。
+```
+
+
 
 ### Item 4: Make sure that objects are initialized before they're used
 
@@ -918,3 +987,593 @@ std::shared_ptr<Widget> pw(new Widget); // store newed object in a smart pointer
 processWidget( pw , priority()); // this call won't leak    
 ```
 
+
+
+### Item 18: Make interfaces easy to use correctly and hard to use incorrectly
+
+要开发一个容易使用并且不易出错的接口，就要想客户会犯什么样的错，假设设计一个需要表示日期的class
+
+```c++
+class Date {
+public:
+Date(int month, int day, int year);
+// 客户可能犯的错误：
+//   1>，错误的参数顺序传入。
+//   2>，非法的月份和日期    
+    struct Day {
+        explicit Day(int d):val(m) {} 
+        int val;
+    }
+    struct Month {
+        explicit Month(int m):val(d) {}
+        int val;
+    }
+    struct Year {
+        explicit Year(int y):val(d) {}
+        int val;    
+    }
+    //可以将年月日包装为一个类。
+    //此时日期构造函数为
+    Date d(Month(3), Day(30), Year(1995));
+    //同理也可以包装月份如下
+class Month {
+    public:
+    static Month Jan() { return Month(1); } // functions returning all valid
+    static Month Feb() { return Month(2); } // Month values; see below for
+    ... // why these are functions, not
+    static Month Dec() { return Month(12); } // objects
+    ... // other member functions
+    private:
+    explicit Month(int m);
+    // prevent creation of new
+    // Month values
+    ...
+    // month-specific data
+};
+    
+    
+    
+```
+
+预防客户做错还有一个方法：限制客户做什么。通常可以通过const修饰完成
+
+此外任何接口要求客户必须做什么，就有可能是设计错误。如
+
+```c++
+Investment* createInvestment(); // from Item 13; parameters omitted for simplicit
+//这个指针必须被释放，那么有可能客户没有delete，或者删除多次。所以可以改为
+std::shared_ptr<Investment> createInvestment();
+
+```
+
+### Item 19: Treat class design as type design
+
+精心设计class
+
+设计一个class，应该考虑以下
+
+* 如何被创建和销毁
+
+* 对象初始化和赋值有什么差别
+
+* 如果对象构造的时候以值传递，该如何
+
+* class的和法值，即数值检查
+
+* class需要继承某一个class吗
+
+* class与其他class之间有没有转换呢，可以写non-explicit参数的构造函数
+
+* 这个class有什么函数和操作符
+
+* 函数的private或者public等属性
+
+* class的一般性怎么样，即真正需要的是class还是template
+
+* 是否真的需要一个class，比如需要一个子类（考虑是否在父类上添加函数可以完成新需求）
+
+### Item 20: Prefer pass-by-reference-to- const to pass-by-value
+
+  考虑下面代码
+
+```c++
+class Person {
+	public:
+    Person(); // parameters omitted for simplicity
+    virtual ~Person(); // see Item 7 for why this is virtual
+    ...
+    private:
+    std::string name;
+    std::string address;
+};
+class Student: public Person {
+    public:
+    Student();
+    // parameters again omitted
+    ~Student();
+    ...
+    private:
+    std::string schoolName;
+    std::string schoolAddress;
+};
+bool validateStudent( Student s);
+Student plato;
+bool platoIsOK = validateStudent(plato);
+//当上面函数调用发生时，plato传递给validateStudent参数s（构造函数被调用），参数返回时又进行Student的析构。同时Student的两个成员函数也被构造，同时其父类及其的两个成员函数也被构造，至此一个Person拷贝构造，一个Student拷贝构造，四个string拷贝构造，最后对应其析构，这成本太高。可以改为：
+bool validateStudent( const Student & s);
+//引用传递也可以避免在多态中被切割，即将子类用值传递给父类对象，子类特性会被切割掉，只剩下父类特性。
+// c++ 中内置类型，stl迭代器的传值和传递引用成本都差不多，
+```
+
+### Item 21: Don't try to return a reference when you must return an object
+
+考虑下面例子，
+
+```c++
+class Rational {  //有理数
+    public:
+    Rational(int numerator = 0,
+    int denominator = 1); // see Item 24 for why this ctor isn't declared explicit
+    ...
+    private:
+    int n, d; // numerator and denominator
+    friend const Rational operator*(const Rational& lhs, const Rational& rhs); // see Item 3 for why the return type is const
+};
+
+Rational a(1, 2); // a = 1/2
+Rational b(3, 5); // b = 3/5
+Rational c = a * b; // c should be 3/10
+//1
+const Rational& operator*(const Rational& lhs, const Rational& rhs)
+{
+    Rational result(lhs.n * rhs.n, lhs.d * rhs.d);
+    return result;
+}// 这里返回的是一个局部的引用，肯定是有问题的
+//2
+const Rational& operator*(const Rational& lhs, const Rational& rhs)
+{
+    Rational *result = new Rational(lhs.n * rhs.n, lhs.d * rhs.d);
+    return *result;
+} //上面的代码需要手动释放内存，且对于下面的代码，分配了两次内存，如何合理的释放。
+Rational w, x, y, z;
+w = x * y * z;
+//3
+const Rational& operator*(const Rational& lhs, const Rational& rhs)
+{
+    static Rational result;
+    result = ... ;
+    return result;
+}
+bool operator==(const Rational& lhs, const Rational& rhs);
+Rational a, b, c, d;
+...
+if ((a * b) == (c * d))
+{
+    do whatever's appropriate when the products are equal;
+} else
+{
+	do whatever's appropriate when they're not;
+}
+// 展开为if (operator==( operator*(a, b), operator*(c, d) ))，这是结果始终为true？
+//所以结论是返回引用就是一个不合理的设计。正确应该返回value
+inline const Rational operator*(const Rational& lhs, const Rational& rhs)
+{
+	return Rational(lhs.n * rhs.n, lhs.d * rhs.d);
+}
+```
+
+### Item 22: Declare data members private
+
+这是oop语言的通用，不仅可以进行精准权限设置，也可以封装。
+
+```c++
+class AccessLevels {
+public:
+    ...
+        int getReadOnly() const { return readOnly; }
+    void setReadWrite(int value) { readWrite = value; }
+    int getReadWrite() const { return readWrite; }
+    void setWriteOnly(int value) { writeOnly = value; }
+    private:
+    int noAccess; // no access to this int
+    int readOnly; // read-only access to this int
+    int readWrite; // read-write access to this int
+    int writeOnly; // write-only access to this int
+};
+```
+
+private以为着封装，引用private的数据改变后对代码影响比较小，只需要改变对应成员函数就可以了。public意味着没有封装，当public数据改变后，所以使用这个数据的代码都需要修改。
+
+### Item 23: Prefer non-member non-friend functions to member functions
+
+对于如下实例
+
+```c++
+class WebBrowser {
+    public:
+    ...
+    void clearCache();
+    void clearHistory();
+    void removeCookies();
+	void clearEverything();// calls clearCache, clearHistory, and removeCookies
+};
+//其中clearEverything也可以实现如下
+void clearBrowser(WebBrowser& wb)
+{
+    wb.clearCache();
+    wb.clearHistory();
+    wb.removeCookies();
+}
+// 对于考虑点，面对对象需要数据及其相应操作函数应该绑定在一起，这样看应该是成员函数。
+// 但是对于封装来说成员函数的封装性就比非成员函数的封装性低，这样看应该选择非成员函数。
+//如果一些数据被封装，就比可见。越多的数据被封装，越少的人看到他，就有越大的弹性去改变他。
+// 如果要在一个member函数，一个non-friend，non-member函数之间选择，应该选择non-friend，non-member函数，因为member函数可以访问private数据，enums，typedfs等，这样就降低了封装性。
+//在意封装性而改的non-member并不意味这它不可以是另一个类的成员函数，事实上可以另clearBrowser为某个工具类的成员。现代c++的作法是让这个函数与这个class处于一个namespace中，如；
+namespace WebBrowserStuff {
+class WebBrowser { ... };
+void clearBrowser(WebBrowser& wb);
+...
+}
+```
+
+### Item 24: Declare non-member functions when type conversions should apply to all parameters
+
+考虑下面，
+
+```c++
+class Rational {
+public:
+Rational(int numerator = 0,
+int denominator = 1);
+// ctor is deliberately not explicit;
+// allows implicit int-to-Rational
+// conversions
+int numerator() const; // accessors for numerator and
+int denominator() const; // denominator — see Item 22
+private:
+...
+};
+```
+
+对上面类添加运算函数，以支持*。
+
+```c++
+class Rational {
+public:
+...
+const Rational operator*(const Rational& rhs) const;
+};
+Rational oneEighth(1, 8);
+Rational oneHalf(1, 2);
+Rational result = oneHalf * oneEighth; // fine
+result = result * oneEighth; // fine
+result = oneHalf * 2; // fine
+result = 2 * oneHalf; // error!
+```
+
+如果要支持混合运算，就需要改为non-member函数
+
+```c++
+class Rational {
+...
+// contains no operator*
+};
+// 对于这个函数来说，不需要作为Rational的friend函数，因为Rational的public函数接口完全可以。
+const Rational operator*(const Rational& lhs, const Rational& rhs)
+{
+	return Rational(lhs.numerator() * rhs.numerator(), lhs.denominator() * rhs.denominator());
+}
+```
+
+### Item 25: Consider support for a non-throwing swap
+
+```c++
+
+namespace std {
+    template<typename T> // typical implementation of std::swap;
+    void swap(T& a, T& b) // swaps a's and b's values
+    {
+        T temp(a);
+        a = b;
+        b = temp;
+    }
+}
+```
+
+上面是最简单的std::swap, 当其对象为指针时，如pImpl时。
+
+```c++
+class WidgetImpl { // class for Widget data;
+    public: // details are unimportant
+    ...
+    private:
+    int a, b, c; // possibly lots of data —
+    std::vector<double> v; // expensive to copy!
+        ...
+};
+class Widget { // class using the pimpl idiom
+    public:
+    Widget(const Widget& rhs);
+    Widget& operator=(const Widget& rhs) 
+    // to copy a Widget, copy its WidgetImpl object. For details on implementing
+    { 
+    ...
+    *pImpl = *(rhs.pImpl); // operator= in general, see Items 10, 11, and 12.
+    ... 
+    }
+    ...
+    private:
+    WidgetImpl *pImpl;
+};
+// ----------------------------------------------------------------------------
+//事实上，当我们对Widget对象进行swap的时候，只需要交换其WidgetImpl指针就可以了，于是，可以改swap
+class Widget { // same as above, except for the addition of the swap mem func
+    public:  
+    ...
+    void swap(Widget& other)
+    {
+        std::swap(pImpl, other.pImpl); // to swap Widgets, swap their pImpl pointers
+    }
+    ...
+};
+//下面 template<>表明他是std::swap的一个全特化版本，而<Widget>表示这一特化版本系针对“T是Widget设计的”,通常我们不能够改变std空间的任何东西，但是可以为标准templates如swap制造特化版本。
+namespace std {
+    template<> // revised specialization of  std::swap
+    void swap<Widget>(Widget& a, Widget& b)
+    {
+        a.swap(b); // to swap Widgets, call their swap member function
+    }
+}
+// ----------------------------------------------------------------------------
+```
+
+### Item 26: Postpone variable definitions as long as possible.
+
+假设下面例子
+
+```c++
+void encrypt(std::string& s);
+std::string encryptPassword(const std::string& password)
+{
+    using namespace std;
+    string encrypted;
+    if (password.length() < MinimumPasswordLength) {
+    	throw logic_error("Password is too short");
+    }
+    
+ 	encrypted = encrypt(password);
+    return encrypted;
+}
+// 延后encrypted的构造，并且降低一次构造函数。
+std::string encryptPassword(const std::string& password)
+{
+    ... // check length
+    std::string encrypted(password); 
+    encrypt(encrypted);
+    return encrypted;
+}
+```
+
+### Item 27: Minimize casting.
+
+考虑下面代码，
+
+```c++
+class Window {
+    public:
+    virtual void onResize() { ... }
+    ...
+};
+class SpecialWindow: public Window {
+    public:
+    virtual void onResize() {
+        static_cast<Window>(*this) .onResize();
+    ... // do SpecialWindow specific stuff
+
+    }
+    ...
+};
+//上面代码初衷是将*this转换为Window，然后调用其onResize函数，然后再执行SpecialWindow的onResize专有的方法,但是事实上static_cast<Window>(*this)会得到(*this)的一个副本，然后在这个副本上调用onResize。假设这个onResize函数改变了父类的资源，但是因为是在副本上改变的，即不会传递到下面。所以这样的转化就是有问题的。事实上，子类调用父类需要如下，
+virtual void onResize() {
+     Window::onResize();
+    ... // do SpecialWindow specific stuff
+
+    }
+```
+
+应该尽量少使用dynamic_cast，因为这个成本是比较大的，之所以需要dynamic_cast，通常是一个“你认为的子类”需要调用子类方法，但是实际上你只有指向父类的指针或者引用。但是可以通过下面两点避免。
+
+```c++
+// 1. 使用容器储存指向父类的指针
+class Window { ... };
+class SpecialWindow: public Window {
+public:
+void blink();  // 只有子类有这个方法
+...
+};
+typedef std::vector<std::shared_ptr<Window> > VPW;
+
+VPW winPtrs;
+for (VPW::iterator iter = winPtrs.begin(); iter != winPtrs.end(); ++iter) {
+	if (SpecialWindow *psw = dynamic_cast <SpecialWindow*>(iter->get()))
+		psw->blink();
+}
+// 事实上应该改为
+typedef std::vector<std::shared_ptr< SpecialWindow> > VPSW ;
+VPSW winPtrs;
+for ( VPSW ::iterator iter = winPtrs.begin();  iter != winPtrs.end();  ++iter)
+	(* iter ) ->blink();
+// 但是这样就使得每个子类都需要对应的容器。此时可以改为
+// ----------------------------------------------------------
+// 2. 下面代码里面父类有一个空的blink方法，然后容器里面是父类类型
+class Window {
+public:
+virtual void blink() {} // default impl is no-op;
+
+};
+
+class SpecialWindow: public Window {
+public:
+virtual void blink() { ... }; // in this class, blink
+... // does something
+};
+typedef std::vector<std::shared_ptr<Window> > VPW; VPW winPtrs;
+
+for (VPW::iterator iter = winPtrs.begin(); iter != winPtrs.end(); ++iter)
+	(*iter)->blink();
+// --------------------------------------------------
+// 一定要避免的是一连串的dynamic_cast
+class Window { ... };
+
+// derived classes are defined here
+typedef std::vector<std::tr1::shared_ptr<Window> > VPW;
+VPW winPtrs;
+for (VPW::iterator iter = winPtrs.begin(); iter != winPtrs.end(); ++iter)
+{
+if (SpecialWindow1 *psw1 = dynamic_cast <SpecialWindow1*>(iter->get())) { ... }
+else if (SpecialWindow2 *psw2 = dynamic_cast <SpecialWindow2*>(iter->get())) { ... }
+else if (SpecialWindow3 *psw3 = dynamic_cast <SpecialWindow3*>(iter->get())) { ... }
+    ...
+}
+```
+
+*note* 
+
+1. 尽量避免转型，尤其是dynamic_cast
+
+2. 如果转型是必须的，尽量将转型隐藏在函数后面
+
+3. 使用c++ style 风格
+
+### Item 28: Avoid returning "handles" to object internals.
+
+用一个简单例子表示
+
+```c++
+class Student
+{
+private:
+    int ID;
+    string name;
+public:
+    string& GetName()
+    {
+        return name;
+    }
+};
+
+int main()
+{  
+    Student s;
+    s.GetName() = "Jerry";
+    cout << s.GetName() << endl;
+}
+//如果给GetName加上const，
+// ---------------------------------------------------------------
+ const string& GetName()
+ {
+     return name;
+ }
+//但是还是会存在问题
+const string& fun()
+{
+    return Student().GetName();
+}
+
+int main()
+{
+    string name = fun(); //name指向一个不存的对象的成员变量
+}
+// 因为name指向Student().GetName()的引用，而fun函数结束Student()就会被析构，所以此时的name是一个悬空的引用。所以应该避免引用或者指针指向class的内部。当然vectoe[]之类的还是必须的
+
+```
+
+### Item29: Strive for exception-safe code.
+
+努力做到异常安全
+
+```c++
+class PrettyMenu {
+    public:
+    ...
+    void changeBackground(std::istream& imgSrc); // change background image
+    private:
+    Mutex mutex; // mutex for this object
+    Image *bgImage; // current background image
+    int imageChanges; // # of times image has been changed
+};
+void PrettyMenu::changeBackground(std::istream& imgSrc)
+{
+    lock(&mutex); // acquire mutex (as in Item 14)
+    delete bgImage; // get rid of old background
+    ++imageChanges; // update image change count
+    bgImage = new Image(imgSrc); // install new background
+    unlock(&mutex); // release mutex
+}
+//考虑上面例子，如果new Image(imgSrc)发生异常，则会导致如法解锁，此时可以放置于Lock类中，实际上就是c++的std::lock_guard，
+//------------------------------------------------------------------------------
+class PrettyMenu {
+std::shared_ptr<Image> bgImage;
+};
+void PrettyMenu::changeBackground(std::istream& imgSrc)
+{
+    Lock ml(&mutex);
+    bgImage.reset(new Image(imgSrc));
+    ++imageChanges;
+}
+// 上面代码改变的 ++imageChanges;的位置,使用了Lock类，也使用了智能指针，就不用删除旧图像了
+```
+
+带异常安全性的函数会提供三个保证之一：
+
+1. 基本承诺：如果异常被抛出，程序内的任何事物仍然保持在有效状态下。没有任何对象或者数据结构会因此被破坏。比如上例中本次更换背景图失败，不会导致相关的数据发生破坏。
+
+2. 强烈保证：在基本承诺的基础上，保证成功就是完全成功，失败也能回到之前的状态，不存在介于成功或失败之间的状态。
+
+3. 不抛出异常：承诺这个代码在任何情况下都不会抛出异常，但这只适用于简单的语句。
+
+强烈保证有一种实现方法，那就是copy and swap。原则就是：在修改这个对象之前，先创建它的一个副本，然后对这个副本进行操作，如果操作发生异常，那么异常只发生在这个副本之上，并不会影响对象本身，如果操作没有发生异常，再在最后进行一次swap。
+
+```c++
+struct PMImpl {
+	std::shared_ptr<Image> bgImage; // Impl."; see below for
+	int imageChanges; // why it's a struct
+};
+class PrettyMenu {
+        ...
+    private:
+    Mutex mutex;
+    std::tr1::shared_ptr<PMImpl> pImpl;
+};
+void PrettyMenu::changeBackground(std::istream& imgSrc)
+{
+    Lock ml(&mutex); // acquire the mutex
+    std::shared_ptr<PMImpl> pNew(new PMImpl(*pImpl));
+    pNew->bgImage.reset(new Image(imgSrc));
+    ++pNew->imageChanges;
+    std::swap(pImpl, pNew);
+}
+
+```
+
+copy-and-swap策略关键在于“修改对象数据的副本，然后在一个不抛异常的函数中将修改后的数据和原件置换”。它确实提供了强异常安全保障，但代价是时间和空间，因为必须为每一个即将被改动的对象造出副本。另外，这种强异常安全保障，也会在下面的情况下遇到麻烦：
+
+```c++
+ void someFunc()
+ {
+     f1();
+     f2();
+ }
+```
+
+f1()和f2()都是强异常安全的，但万一f1()没有抛异常，但f2()抛了异常呢？是的，数据会回到f2()执行之前的状态，但程序员可能想要的是数据回复到f1()执行之前。要解决这个问题就需要将f1与f2内容进行融合，确定都没有问题了，才进行一次大的swap，这样的代价都是需要改变函数的结构，破坏了函数的模块性。如果不想这么做，只能放弃这个copy-and-swap方法，将强异常安全保障回退成基本保障。
+
+类似于木桶效应，代码是强异常安全的，还是基本异常安全的，还是没有异常安全，取决于最低层次的那个模块。换言之，哪怕只有一个地方没有考虑到异常安全，整个代码都不是异常安全的。
+
+最后总结一下：
+
+1. 异常安全函数是指即使发生异常也不会泄漏资源或者允许任何数据结构败坏。这样的函数区分为三种可能的保证：基本型、强烈型、不抛异常型。
+
+2. 强烈保证往往可以通过copy-and-swap实现出来，但“强烈保证”并非对所有函数都可以实现或具备现实意义。
+
+3. 异常安全保证通常最高只等于其所调用之各个函数的异常安全保证中的最弱者。
