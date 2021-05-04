@@ -1577,3 +1577,993 @@ f1()和f2()都是强异常安全的，但万一f1()没有抛异常，但f2()抛�
 2. 强烈保证往往可以通过copy-and-swap实现出来，但“强烈保证”并非对所有函数都可以实现或具备现实意义。
 
 3. 异常安全保证通常最高只等于其所调用之各个函数的异常安全保证中的最弱者。
+
+### Item 30: Understand the ins and outs of inlining.****
+
+​	inline是内联的关键字，它可以建议编译器将函数的每一个调用都用函数本体替换。这是一种以空间换时间的做法。把每一次调用都用本体替换，无疑会使代码膨胀，(降低指令缓存的命中率)。但可以节省函数调用的成本，因为函数调用需要将之前的参数以堆栈的形式保存起来，调用结束后又要从堆栈中恢复那些参数。
+
+​	但注意inline只是对编译器的一个建议，编译器并不表示一定会采纳，比如当一个函数内部包含对自身的递归调用时，inline就会被编译器所忽略。对于虚函数的inline，编译器也会将之忽略掉，因为内联（代码展开）发生在编译期，而虚函数的行为是在运行期决定的，所以编译器忽略掉对虚函数的inline。对于函数指针，当一个函数指针指向一个inline函数的时候，通过函数指针的调用也有可能不会被编译器处理成内联。
+
+对于如下代码
+
+```c++
+inline void f() {...}
+void (*pf)() = f;
+f(); // this call will be inlined, because it's a "normal" call
+pf();// this call probably won't be, because it's through a function pointer
+```
+
+​	另一方面，即使有些函数没有inline关键字，编译器也会将之内联，用本体替换调用代码，比如直接写在class内部的成员函数，如下
+
+```c++
+class Person
+{
+private:
+    int age;
+public:
+    int getAge() const
+    {
+        return age;
+    }
+    void setAge(const int o_age);
+};
+void Person::setAge(const int o_age)
+{
+    age = o_age;
+}
+```
+
+这里getAge()尽管没有inline关键字，但因为是直接写在class里面的，所以编译器将之处理成内联的；setAge()是在类内声明、类外定义的，编译器就不会将之处理成内联的了。
+
+构造函数和析构函数虽然“看”似简单，但编译器会在背后做很多事情。因为c++对于“对象被创建和销毁时发生了什么事”做了一些保证。如果在构造期间发生异常，则会销毁已经构造好的数据。比如一个空的构造函数里面会由编译器写上对所有成员函数的初始化，如果将之inline，将会导致大批量的代码复制，所以不对构造函数和析构函数inline为好。如下所示：
+
+```c++
+class Base {
+    public:
+    private:
+    std::string bm1, bm2;
+};
+class Derived: public Base {
+    public:
+    Derived() {}
+    private:
+    std::string dm1, dm2, dm3;
+};
+//实际上编译器会添加以下代码（例如Derived的构造函数，即使用户的Derived是一个空的函数体）
+Derived::Derived()
+{
+   
+    Base::Base();
+    try { dm1.std::string::string(); }  //构造第一个参数
+    catch (...) {
+    Base::~Base();
+    throw; // propagate the exception
+    }
+    try { dm2.std::string::string(); } //构造第二个参数
+    catch(...) { // 销毁前一个
+    dm1.std::string::~string();      // destroy dm1,
+    Base::~Base(); // destroy base class part, and
+    throw; // propagate the exception
+    }
+    try { dm3.std::string::string(); } //构造第三个参数
+    catch(...) {  // 销毁前两个
+    dm2.std::string::~string();   
+    dm1.std::string::~string();
+    Base::~Base();
+    throw;
+    }
+}
+
+```
+
+
+
+​	要慎用inline，是因为一旦编译器真的将之inline了，那么这个inline函数一旦被修改，整个程序都需要重新编译，而如果这个函数不是inline的，那么只要重新连接就好。另外，一些调试器对inline函数的支持也是有限的。
+
+​	作者认为，“一开始先不要将任何函数声明为inline”，经测试，确实发现某个函数的inline要比不对之inline的性能提升很多，才对之inline。在大多数情况下，inline并不是程序的瓶颈，真正的精力应该放在改善一些算法的修缮，以及反复调用的代码研究上，它们往往才是耗时的瓶颈所在。
+
+### Item31: Minimize compilation dependencies between files.
+
+在说这一条款之前，先要了解一下C/C++的编译知识，假设有三个类ComplexClass,  SimpleClass1和SimpleClass2，采用头文件将类的声明与类的实现分开，这样共对应于6个文件，分别是ComplexClass.h，ComplexClass.cpp，SimpleClass1.h，SimpleClass1.cpp，SimpleClass2.h，SimpleClass2.cpp。
+
+ComplexClass复合两个BaseClass，SimpleClass1与SimpleClass2之间是独立的，ComplexClass的.h是这样写的：
+
+```c++
+#ifndef COMPLESS_CLASS_H
+#define COMPLESS_CLASS_H
+
+#include “SimpleClass1.h”
+#include “SimpleClass2.h”
+
+class ComplexClass
+{
+    SimpleClass1 xx;
+    SimpleClass2 xxx;
+};
+
+#endif /* COMPLESS _CLASS_H */
+```
+
+我们来考虑以下几种情况：
+
+***Case 1：\***
+
+现在SimpleClass1.h发生了变化，比如添加了一个新的成员变量，那么没有疑问，SimpleClass1.cpp要重编，SimpleClass2因为与SimpleClass1是独立的，所以SimpleClass2是不需要重编的。
+
+那么现在的问题是，ComplexClass需要重编吗？
+
+答案是“是”，因为ComplexClass的头文件里面包含了SimpleClass1.h（使用了SimpleClass1作为成员对象的类），而且所有使用ComplexClass类的对象的文件，都需要重新编译！
+
+如果把ComplexClass里面的#include  “SimpleClass1.h”给去掉，当然就不会重编ComplexClass了，但问题是也不能通过编译了，因为ComplexClass里面声明了SimpleClass1的对象xx。那如果把#include “SimpleClass1.h”换成类的声明class SimpleClass1，会怎么样呢？能通过编译吗？
+
+答案是“否”，因为编译器需要知道ComplexClass成员变量SimpleClass1对象的大小(必须读取class定义才能知道对象大小)，而这些信息仅由class  SimpleClass1声明是不够的，但如果SimpleClass1作为一个函数的形参，或者是函数返回值，用class  SimpleClass1声明就够了。如：
+
+```c++
+ // ComplexClass.h
+ class SimpleClass1;
+ …
+ SimpleClass1 GetSimpleClass1() const;
+ …
+```
+
+但如果换成指针呢？像这样：
+
+```c++
+// ComplexClass.h
+#include “SimpleClass2.h”
+
+class SimpleClass1;
+
+class ComplexClass:
+{
+    SimpleClass1* xx;
+    SimpleClass2 xxx;
+};
+```
+
+这样能通过编译吗？
+
+ 
+
+答案是“是”，因为编译器视所有指针为一个字长（在32位机器上是4字节），因此class  SimpleClass1的声明是够用了。但如果要想使用SimpleClass1的方法，还是要包含SimpleClass1.h，但那是ComplexClass.cpp做的，因为ComplexClass.h只负责类变量和方法的声明。
+
+ 
+
+那么还有一个问题，如果使用SimpleClass1*代替SimpleClass1后，SimpleClass1.h变了，ComplexClass需要重编吗？
+
+先看Case2。
+
+ 
+
+***Case 2：***
+
+回到最初的假定上（成员变量不是指针），现在SimpleClass1.cpp发生了变化，比如改变了一个成员函数的实现逻辑（换了一种排序算法等），但SimpleClass1.h没有变，那么SimpleClass1一定会重编，SimpleClass2因为独立性不需要重编，那么现在的问题是，ComplexClass需要重编吗？
+
+ 
+
+答案是“否”，因为编译器重编的条件是发现一个变量的类型或者大小跟之前的不一样了，但现在SimpleClass1的接口并没有任务变化，只是改变了实现的细节，所以编译器不会重编。
+
+ 
+
+***Case 3：***
+
+结合Case1和Case2，现在我们来看看下面的做法：
+
+```c++
+
+// ComplexClass.h
+#include “SimpleClass2.h”
+
+class SimpleClass1;
+
+class ComplexClass
+{
+    SimpleClass1* xx;
+    SimpleClass2 xxx;
+};
+```
+
+```c++
+// ComplexClass.cpp
+
+void ComplexClass::Fun()
+{
+    SimpleClass1->FunMethod();
+}
+```
+
+请问上面的ComplexClass.cpp能通过编译吗？
+
+ 
+
+答案是“否”，因为这里用到了SimpleClass1的具体的方法，所以需要包含SimpleClass1的头文件，但这个包含的行为已经从ComplexClass里面拿掉了（换成了class SimpleClass1），所以不能通过编译。
+
+ 
+
+如果解决这个问题呢？其实很简单，只要在ComplexClass.cpp里面加上#include  “SimpleClass1.h”就可以了。换言之，我们其实做的就是将ComplexClass.h的#include  “SimpleClass1.h”移至了ComplexClass1.cpp里面，而在原位置放置class SimpleClass1。
+
+ 
+
+这样做是为了什么？假设这时候SimpleClass1.h发生了变化，会有怎样的结果呢？
+
+SimpleClass1自身一定会重编，SimpleClass2当然还是不用重编的，ComplexClass.cpp因为包含了SimpleClass1.h，所以需要重编，但换来的好处就是所有用到ComplexClass的其他地方，它们所在的文件不用重编了！因为ComplexClass的头文件没有变化，接口没有改变！
+
+ 
+
+总结一下，对于C++类而言，如果它的头文件变了，那么所有这个类的对象所在的文件都要重编，但如果它的实现文件（cpp文件）变了，而头文件没有变（对外的接口不变），那么所有这个类的对象所在的文件都不会因之而重编。
+
+因此，避免大量依赖性编译的解决方案就是：在头文件中用class声明外来类，用指针或引用代替变量的声明；在cpp文件中包含外来类的头文件。
+
+于是进入正文。对于如下的案例
+
+
+
+```c++
+#include <string>
+#include "date.h"
+#include "address.h"
+class Person {
+    public:
+    Person(const std::string& name, const Date& birthday,
+    const Address& addr);
+    std::string name() const;
+    std::string birthDate() const;
+    std::string address() const;
+    ...
+    private:
+    std::string theName;
+    Date theBirthDate;
+    Address theAddress;
+};
+
+```
+
+ 
+
+两种方法解决文件间编译依赖，
+
+1. 第一种是采用Handler Classes（用指针指向真正实现的方法），一句话，就是.h里面不包含类的自定义头文件，用“class  类名”的声明方式进行代替（也要把相应的成员变量替换成指针或引用的形式），在.cpp文件里面包含类的自定义头文件去实现具体的方法。改造之后的程序看起来是这样子的：
+
+```c++
+// Person.h
+#include <string>
+using namespace std;
+
+class PersonImp;
+
+class Person
+{
+private:
+    //string Name;
+    //MyDate Birthday;
+    //MyAddress Address;
+    PersonImp* MemberImp;
+
+public:
+    string GetName() const;
+    string GetBirthday() const;
+    string GetAddress() const;
+    // follows functions
+    // ...
+};
+```
+
+
+
+```c++
+// Person.cpp
+#include "PersonImp.h"
+#include "Person.h"
+
+string Person::GetName() const
+{
+    return MemberImp->GetName();
+}
+string Person::GetBirthday() const
+{
+    return MemberImp->GetName();
+}
+string Person::GetAddress() const
+{
+    return MemberImp->GetAddress();
+}
+```
+
+```c++
+// PersonImp.h
+#ifndef PersonImp_H
+#define PersonImp_H
+
+#include <string>
+#include "MyAddress.h"
+#include "MyDate.h"
+using namespace std;
+
+class PersonImp
+{
+private:
+    string Name;
+    MyAddress Address;
+    MyDate Birthday;
+
+public:
+    string GetName() const
+    {
+        return Name;
+    }
+
+    string GetAddress() const
+    {
+        return Address.ToString();
+    }
+
+    string GetBirthday() const
+    {
+        return Birthday.ToString();
+    }
+};
+
+#endif /* PersonImp_H */
+```
+
+这样，客户只需要使用Person.h的头文件就可以了，因为在Person.h头文件中，只声明了PersonImp*指针，而在Person.cpp中包含了PersonImp的定义，我们自己修改接口的时候，可以修改PersonIm.h就可以了
+
+2. 下面来谈谈书中的第二部分，用Interface  Classes来降低编译的依赖。从上面也可以看出，避免重编的诀窍就是保持头文件（接口）不变化，而保持接口不变化的诀窍就是不在里面声明编译器需要知道大小的变量，Handler Classes的处理就是把变量换成变量的地址（指针），头文件只有class  xxx的声明，而在cpp里面才包含xxx的头文件。Interface  Classes则是利用继承关系和多态的特性，在父类里面只包含成员方法（成员函数），而没有成员变量，像这样：
+
+```c++
+// Person.h
+#include <string>
+using namespace std;
+
+class MyAddress;
+class MyDate;
+class RealPerson;
+
+class Person
+{
+public:
+    virtual string GetName() const = 0;
+    virtual string GetBirthday() const = 0;
+    virtual string GetAddress() const = 0;
+    virtual ~Person(){}
+};
+```
+
+而这些方法的实现放在其子类中，像这样：
+
+```c++
+// RealPerson.h
+#include "Person.h"
+#include "MyAddress.h"
+#include "MyDate.h"
+
+class RealPerson: public Person
+{
+private:
+    string Name;
+    MyAddress Address;
+    MyDate Birthday;
+public:
+    RealPerson(string name, const MyAddress& addr, const MyDate& date):Name(name), Address(addr), Birthday(date){}
+    virtual string GetName() const;
+    virtual string GetAddress() const;
+    virtual string GetBirthday() const;
+};
+```
+
+在RealPerson.cpp里面去实现GetName()等方法。从这里我们可以看到，只有子类里面才有成员变量，也就是说，如果Address的头文件变化了，那么子类一定会重编，所有用到子类头文件的文件也要重编，所以为了防止重编，应该尽量少用子类的对象。利用多态特性，我们可以使用父类的指针，像这样Person* p = new RealPerson(xxx)，然后p->GetName()实际上是调用了子类的GetName()方法。
+
+但这样还有一个问题，就是new RealPerson()这句话一写，就需要RealPerson的构造函数，那么RealPerson的头文件就要暴露了，这样可不行。还是只能用Person的方法，所以我们在Person.h里面加上这个方法：
+
+```c++
+ // Person.h
+ static Person* CreatePerson(string name, const MyAddress& addr, const MyDate& date);
+```
+
+注意这个方法是静态的（没有虚特性），它被父类和所有子类共有，可以在子类中去实现它：
+
+```c++
+// RealPerson.cpp
+#include “Person.h”
+Person* Person::CreatePerson(string name, const MyAddress& addr, const MyDate& date)
+{
+    return new RealPerson(name, addr, date);
+}
+```
+
+这样在客户端代码里面，可以这样写：
+
+```c++
+// Main.h
+ class MyAddress;
+ class MyDate;
+ void ProcessPerson(const string& name, const MyAddress& addr, const MyDate& date);
+```
+
+```c++
+// Main.cpp
+#include "Person.h"
+#include “MyAddress.h”;
+#include “MyDate.h”;
+
+void ProcessPerson(const string& name, const MyAddress& addr, const MyDate& date)
+{
+    Person* p = Person::CreatePerson(name, addr, date);
+…
+}
+```
+
+请记住：
+
+**1. 支持“编译依存性最小化”的一般构想是：相依于声明式，不要相依于定义式，基于此构想的两个手段是Handler classes和Interface classes。**
+
+**2. 程序库头文件应该以“完全且仅有声明式”的形式存在，这种做法不论是否涉及templates都适用。**
+
+### Item 32: Make sure public inheritance models "is-a."
+
+这一条款是说的是公有继承的逻辑，如果使用继承，而且继承是公有继承的话，一定要确保子类是一种父类（is-a关系）。这种逻辑可能与生活中的常理不相符，比如企鹅是生蛋的，所有企鹅是鸟类的一种，直观来看，我们可以用公有继承描述：
+
+```c++
+class Bird
+{
+public:
+    virtual void fly(){cout << "it can fly." << endl;}
+};
+
+class Penguin: public Bird
+{
+    // fly()被继承过来了，可以覆写一个企鹅的fly()方法，也可以直接用父类的
+};
+
+int main()
+{
+    Penguin p;
+    p.fly(); // 问题是企鹅并不会飞！
+}
+```
+
+
+
+但问题就来了，虽然企鹅是鸟，但鸟会飞的技能并不适用于企鹅，该怎么解决这个问题呢？方法一，在Penguin的fly()方法里面抛出异常，一旦调用了p.fly()，那么就会在运行时捕捉到这个异常。这个方法不怎么好，因为它要在运行时才发现问题。
+
+方法二，去掉Bird的fly()方法，在中间加上一层FlyingBird类（有fly()方法）与NotFlyingBird类（没有fly()方法），然后让企鹅继承与NotFlyingBird类。这个方法也不好，因为会使注意力分散，继承的层次加深也会使代码难懂和难以维护。
+
+方法三，保留所有Bird一定会有的共性（比如生蛋和孵化），去掉Bird的fly()方法，只在其他可以飞的鸟的子类里面单独写这个方法。这是一种比较好的选择，因为根本没有定义fly()方法，所以Penguin对象调用fly()会在编译期报错。
+
+在艰难选择方法三之后，我们回过头来思考，就是在所有public继承的背后，一定要保证父类的所有特性子类都可以满足（父类能飞，子类一定可以飞），抽象起来说，就是在可以使用父类的地方，都一定可以使用子类去替换。
+
+任何父类可以出现的地方，子类一定可以替代这个父类，只有当替换使软件功能不受影响时，父类才可以真正被复用。通俗地说，是“**子类可以扩展父类的功能，但不能改变父类原有的功能**”。
+
+**“public继承”意味着is-a。适用于base classes身上的每一件事情一定也适用于derived classes身上，因为每一个derived class对象也都是一个base class对象。**
+
+
+
+### Item 33: Avoid hiding inherited names
+
+避免遮掩继承来的名字
+
+名称的遮掩可以分成变量的遮掩与函数的遮掩两类，本质都是名字的查找方式导致的，当编译器要去查找一个名字时，它一旦找到一个相符的名字，就不会再往下去找了，因此遮掩本质上是优先查找哪个名字的问题。
+
+而查找是分作用域的，虽然本条款的命名是打着“继承”的旗子来说的，但我觉得其实与继承并不是很有关系，关键是作用域。
+
+举例子说明这个问题会比较好理解。
+
+```c++
+//例1：普通变量遮掩
+int i = 3;
+
+int main()
+{
+    int i = 4;
+    cout << i << endl; // 输出4
+}
+```
+
+这是一个局部变量遮掩全局变量的例子，编译器在查找名字时，优先查找的是局部变量名，找到了就不会再找，所以不会有warning，不会有error，只会是这个结果。
+
+```c++
+//例2：成员变量遮掩
+class Base
+{
+public:
+    int x;
+    Base(int _x):x(_x){}
+};
+
+class Derived: public Base
+{
+public:
+    int x;
+    Derived(int _x):Base(_x),x(_x + 1){}
+};
+
+int main()
+{
+    Derived d(3);
+    cout << d.x << endl; //输出4
+}
+```
+
+
+
+因为定义的是子类的对象，所以会优先查找子类独有的作用域，这里已经找到了x，所以不会再查找父类的作用域，因此输出的是4，如果子类里没有另行声明x成员变量，那么才会去查找父类的作用域。那么这种情况下如果想要访问父类的x，怎么办呢？
+
+可以在子类里面添加一个方法：
+
+```c++
+int GetBaseX() {return Base::x;}
+```
+
+利用Base::x，可以使查找指定为父类的作用域，这样就能返回父类的x的值了。
+
+```c++
+//例3：函数的遮掩
+class Base
+{
+public:
+    void CommonFunction(){cout << "Base::CommonFunction()" << endl;}
+    void virtual VirtualFunction(){cout << "Base::VirturalFunction()" << endl;}
+    void virtual PureVirtualFunction() = 0;
+};
+
+class Derived: public Base
+{
+public:
+    void CommonFunction(){cout << "Derived::CommonFunction()" << endl;}
+    void virtual VirtualFunction(){cout << "Derived::VirturalFunction()" << endl;}
+    void virtual PureVirtualFunction(){cout << "Derived::PureVirtualFunction()" << endl;}
+};
+
+int main()
+{
+    Derived d;
+    d.CommonFunction(); // Derived::CommonFunction()
+    d.VirtualFunction(); // Derived::VirtualFunction()
+    d.PureVirtualFunction(); // Derived::PureVirtualFunction()
+    return 0;
+}
+```
+
+与变量遮掩类似，函数名的查找也是先从子类独有的作用域开始查找的，一旦找到，就不再继续找下去了。这里无论是普通函数，虚函数，还是纯虚函数，结果都是输出子类的函数调用。
+
+下面我们来一个难点的例子。
+
+```c++
+//例4：重载函数的遮掩
+class Base
+{
+public:
+    void CommonFunction(){cout << "Base::CommonFunction()" << endl;}
+    void virtual VirtualFunction(){cout << "Base::VirturalFunction()" << endl;}
+    void virtual VirtualFunction(int x){cout << "Base::VirtualFunction() With Parms" << endl;}
+    void virtual PureVirtualFunction() = 0;
+};
+
+class Derived: public Base
+{
+public:
+    void CommonFunction(){cout << "Derived::CommonFunction()" << endl;}
+    void virtual VirtualFunction(){cout << "Derived::VirturalFunction()" << endl;}
+    void virtual PureVirtualFunction(){cout << "Derived::PureVirtualFunction()" << endl;}
+};
+
+int main()
+{
+    Derived d;
+    d.VirtualFunction(3); // ?
+    return 0;
+}
+```
+
+很多人都会认为输出的是**Base::VirtualFunction() With Parms**，实际上这段代码却是编译不过的。因为编译器在查找名字时，并没有“为重载而走的很远”，C++的确是支持重载的，编译器在发现函数重载时，会去寻找相同函数名中最为匹配的一个函数（从形参个数，形参类型两个方面考虑，与返回值没有关系），如果大家的匹配程度都差不多，那么编译器会报歧义的错。
+
+但以上法则成立的条件是这些函数位于相同的作用域中，而这里是不同的域！编译器先查找子类独有的域，一旦发现了完全相同的函数名，它就已经不再往父类中找了！在核查函数参数时，发现了没有带整型形参，所以直接报编译错了。
+
+如果去掉子类的VirualFunction()，那么才会找到父类的VirtualFunction(int)。
+
+提醒一下，千万不要被前面的Virtual关键字所误导，你可以试一个普通函数，结果是一样的，只要子类中有同名函数，不管形参是什么，编译器都不会再往父类作用域里面找了。
+
+ 
+
+好，如果现在你非要访问父类里面的方法，那也可以，书上给出了两种作法，一种是采用using声明，另一种是定义转交函数。
+
+
+
+```c++
+//例5：采用using声明，使查找范围扩大至父类指定的函数：
+class Base
+{
+public:
+    void CommonFunction(){cout << "Base::CommonFunction()" << endl;}
+    void virtual VirtualFunction(){cout << "Base::VirturalFunction()" << endl;}
+    void virtual VirtualFunction(int x){cout << "Base::VirtualFunction() With Parms" << endl;}
+    void virtual PureVirtualFunction() = 0;
+};
+
+class Derived: public Base
+{
+public:
+    using Base::VirtualFunction; // 第一级查找也要包括Base::VirtualFunction
+    void CommonFunction(){cout << "Derived::CommonFunction()" << endl;}
+    void virtual VirtualFunction(){cout << "Derived::VirturalFunction()" << endl;}
+    void virtual PureVirtualFunction(){cout << "Derived::PureVirtualFunction()" << endl;}
+};
+
+int main()
+{
+    Derived d;
+    d.VirtualFunction(3); // 这样没问题了，编译器会把父类作用域里面的函数名VirtualFunciton也纳入第一批查找范围，这样就能发现其实是父类的函数与main中的调用匹配得更好（因为有一个形参），这样会输出Base::VirtualFunction() With Parms
+    return 0;
+}
+```
+
+
+
+用了using，实际上是告诉编译器，把父类的那个函数也纳入第一批查找范围里面，这样就能发现匹配得更好的重载函数了。
+
+
+
+```c++
+//例6：使用转交函数强制指定父类的作用域
+class Base
+{
+public:
+    void CommonFunction(){cout << "Base::CommonFunction()" << endl;}
+    void virtual VirtualFunction(){cout << "Base::VirturalFunction()" << endl;}
+    void virtual VirtualFunction(int x){cout << "Base::VirtualFunction() With Parms" << endl;}
+    void virtual PureVirtualFunction() = 0;
+};
+
+class Derived: public Base
+{
+public:
+    using Base::VirtualFunction;
+    void CommonFunction(){cout << "Derived::CommonFunction()" << endl;}
+    void virtual VirtualFunction(){cout << "Derived::VirturalFunction()" << endl;}
+    void virtual PureVirtualFunction(int x){cout << "Derived::PureVirtualFunction()" << endl;}
+    void virtual VirtualFunction(int x){Base::VirtualFunction(x)};
+};
+
+int main()
+{
+    Derived d;
+    d.VirtualFunction(3); // 输出Base::VirtualFunction() With Parms
+    return 0;
+}
+```
+
+采用这种做法，需要在子类中再定义一个带int参的同名函数，在这个函数里面用Base进行作用域的指定，从而调用到父类的同名函数。
+
+快结尾了，这里还是声明一下，在不同作用域内定义相同的名字，无论是发生在变量还是函数身上，都是非常无聊也是不好的做法。除了考试试卷上，还是不要把名字遮掩问题带到任何地方，命个不同的名字真的有那么难吗？
+
+ 
+
+最后总结一下：
+
+**1. derived classses内的名称会遮掩base classes内的名称。在public继承下从来没有人希望如此。**
+
+**2. 为了让被遮掩的名称再见天日，可使用using声明式或转交函数（forwarding functions）。**
+
+
+
+
+
+### Item 34: Differentiate between inheritance of interface and inheritance of implementation
+
+区分接口继承和实现继承
+
+这个条款书上内容说的篇幅比较多，但其实思想并不复杂。只要能理解三句话即可，第一句话是：纯虚函数只继承接口；第二句话是：虚函数既继承接口，也提供了一份默认实现；第三句话是：普通函数既继承接口，也强制继承实现。这里假定讨论的成员函数都是public的。
+
+ 
+
+这里回顾一下这三类函数，如下：
+
+
+
+```c++
+class BaseClass
+{
+public:
+    void virtual PureVirtualFunction() = 0; // 纯虚函数
+    void virtual ImpureVirtualFunction(); // 虚函数
+    void CommonFunciton(); // 普通函数
+};
+```
+
+
+
+纯虚函数有一个“等于0”的声明，具体实现一般放在派生中（但基类也可以有具体实现），所在的类（称之为虚基类）是不能定义对象的，派生类中仍然也可以不实现这个纯虚函数，交由派生类的派生类实现，总之直到有一个派生类将之实现，才可以由这个派生类定义出它的对象。
+
+虚函数则必须有实现，否则会报链接错误。虚函数可以在基类和多个派生类中提供不同的版本，利用多态性质，在程序运行时动态决定执行哪一个版本的虚函数（机制是编译器生成的虚表）。virtual关键字在基类中必须显式指明，在派生类中不必指明，即使不写，也会被编译器认可为virtual函数，virtual函数存在的类可以定义实例对象。
+
+普通函数则是将接口与实现都继承下来了，如果在派生类中重定义普通函数，将会出现名称的遮盖（见条款33），事实上，也是极不推荐在派生类中覆盖基类的普通函数的，如果真的要这样做，请一定要考虑是否该把基类的这个函数声明为虚函数或者纯虚函数。
+
+ 
+
+下面是三类成员函数的应用：
+
+
+
+```c++
+class BaseClass
+{
+public:
+    void virtual PureVirtualFunction() = 0; // 纯虚函数
+    void virtual ImpureVirtualFunction(); // 虚函数
+    void CommonFunciton(); // 普通函数
+};
+void BaseClass::PureVirtualFunction()
+{
+    cout << "Base PureVirtualFunction" << endl;
+}
+void BaseClass::ImpureVirtualFunction()
+{
+    cout << "Base ImpureVirtualFunciton" << endl;
+}
+
+class DerivedClass1: public BaseClass
+{
+    void PureVirtualFunction()
+    {
+        cout << "DerivedClass1 PureVirturalFunction Called" << endl;
+    }
+};
+
+class DerivedClass2: public BaseClass
+{
+    void PureVirtualFunction()
+    {
+        cout << "DerivedClass2 PureVirturalFunction Called" << endl;
+    }
+};
+
+int main()
+{
+    BaseClass *b1 = new DerivedClass1();
+    BaseClass *b2 = new DerivedClass2();
+    b1->PureVirtualFunction(); // 调用的是DerivedClass1版本的PureVirtualFunction
+    b2->PureVirtualFunction(); // 调用的是DerivedClass2版本析PureVirtualFunction
+    b1->BaseClass::PureVirtualFunction(); // 当然也可以调用BaseClass版本的PureVirtualFucntion
+    return 0;
+}
+```
+
+
+
+书上提倡用纯虚函数去替代虚函数，因为虚函数提供了一个默认的实现，如果派生类的想要的行为与这个虚函数不一致，而又恰好忘记去覆盖虚函数，就会出现问题。但纯虚函数不会，因为它从语法上限定派生类必须要去实现它，否则将无法定义派生类的对象。
+
+同时，因为纯虚函数也是可以有默认实现的（但是它从语法上强调派生类必须重定义之，否则不能定义对象），所以完全可以替换虚函数。
+
+ 
+
+普通函数所代表的意义是不变性凌驾与特异性，所以它绝不该在派生类中被重新定义。
+
+ 
+
+在设计类成员函数时，一般既不要将所有函数都声明为non-virtual（普通函数），这会使得没有余裕空间进行特化工作；也一般不要将所有函数都声明为virtual（虚函数或纯虚函数），因为一般会有一些成员函数是基类就可以决定下来的，而被所有派生类所共用的。这个设计法则并不绝对，要视实际情况来定。
+
+ 
+
+最后总结一下：
+
+**1. 接口继承和实现继承不同。在public继承之下，derived class总是继承base class的接口；**
+
+**2. pure virtual函数只具体指定接口继承；**
+
+**3. impure virtual函数具体指定接口继承和缺省实现继承；**
+
+**4. non-virutal函数具体指定接口继承以及强制性实现继承。**
+
+
+
+## Item 35:
+
+
+
+## Item 36: Never redefine an inherited non-virtual function
+
+这个条款的内容很简单，见下面的示例：
+
+
+
+```c++
+class BaseClass
+{
+public:
+    void NonVirtualFunction()
+    {
+        cout << "BaseClass::NonVirtualFunction" << endl;
+    }
+};
+
+class DerivedClass: public BaseClass
+{
+public:
+    void NonVirtualFunction()
+    {
+        cout << "DerivedClass::NonVirtualFunction" << endl;
+    }
+};
+
+int main()
+{
+    DerivedClass d;
+    BaseClass* bp = &d;
+    DerivedClass* dp = &d;
+    bp->NonVirtualFunction(); // 输出BaseClass::NonVirtualFunction
+    dp->NonVirtualFunction(); // 输出DerivedClass::NonVirtualFunction
+}
+```
+
+从输出结果可以看到一个有趣的现象，那就是两者都是通过相同的对象d调用成员函数NonVirutalFunction，但显示结果却不相同，这会给读者带来困惑。（如果NonVirtualFunction函数是虚函数，则调用结果都是DerivedClass::NonVirtualFunction, 既动态绑定）
+
+现在这个现象的原因是在于BaseClass:NonVirutalFunction与DerivedClass:NonVirtualFunction都是静态绑定，(静态绑定就是这个值最后赋值的对象，动态绑定就是这个值创建时候的类型，如：Base *b = new Derive(), b的动态类型为Derive，静态类型为Base)所以调用的non-virtual函数都是各自定义的版本。
+
+ 
+
+回顾下之前的条款，如果是public继承的话，那么：
+
+1) 适用于BaseClass的行为一定适用于DerivedClass，因为每一个DerivedClass对象都是一个BaseClass对象；
+
+2) 如果BaseClass里面有非虚函数，那么DerivedClass一定是既继承了接口，也继承了实现；
+
+3) 子类里面的同名函数会掩盖父类的同名函数，这是由于搜索法则导致的。
+
+ 
+
+如果DerivedClass重定义一个non-virtual函数，那么会违反上面列出的法则。以第一条为例，如果子类真的要重定义这个函数，那么说明父类的这个函数不能满足子类的要求，这就与每一个子类都是父类的原则矛盾了。
+
+ 
+
+可以总结一下了，无论哪一个观点，结论都相同：
+
+
+
+**任何情况下都不该重新定义一个继承而来的non-virtual函数。**
+
+### Item 37: Never redefine a function's inherited default parameter value
+
+
+
+先看下面的例子：
+
+```c++
+enum MyColor
+{
+    RED,
+    GREEN,
+    BLUE,
+};
+
+class Shape
+{
+public:
+    void virtual Draw(MyColor color = RED) const = 0;
+};
+
+class Rectangle: public Shape
+{
+public:
+    void Draw(MyColor color = GREEN) const
+    {
+        cout << "default color = " << color << endl;
+    }
+};
+
+class Triangle : public Shape
+{
+public:
+    void Draw(MyColor color = BLUE) const
+    {
+        cout << "default color = " << color << endl;
+    }
+};
+
+
+int main()
+{
+    Shape *sr = new Rectangle();
+    Shape *st = new Triangle();
+    cout << "sr->Draw() = "; // ？
+    sr->Draw();
+    cout << "st->Draw() = "; // ？
+    st->Draw();
+
+    delete sr;
+    delete st;
+}
+```
+
+
+
+问号所在处的输出是什么？
+
+要回答这个问题，需要回顾一下虚函数的知识，如果父类中存在有虚函数，那么编译器便会为之生成虚表与虚指针，在程序运行时，根据虚指针的指向，来决定调用哪个虚函数，这称之与动态绑定，与之相对的是静态绑定，静态绑定在编译期就决定了。
+
+实现动态绑定的代价是比较大的，所以编译器在函数参数这部分，并没有采用动态绑定的方式，也就是说，默认的形参是静态绑定的，它是编译期就决定下来了。
+
+ 
+
+我们看下这两行代码，分析一下：
+
+```c++
+ Shape *sr = new Rectangle();
+ Shape *st = new Triangle();
+```
+
+sr的静态类型是Shape*，动态类型才是Rectangle*，类似地，st的静态类型是Shape*，动态类型是Triangle*。这里没有带参数，所以使用的是默认的形参，即为静态的Shape::Draw()里面的缺省值RED，所以两个问题所在处的输出值都是0。
+
+正因为编译器并没有对形参采用动态绑定，所以如果对继承而来的虚函数使用不同的缺省值，将会给读者带来极大的困惑，试想一下下面两行代码：
+
+```c++
+ Shape *sr = new Rectangle(); // 默认值是RED
+ Rectangle *rr = new Rectangle(); // 默认值是GREEN
+```
+
+如果一定要为虚函数采用默认值，那么只要在父类中设定就可以了，可以借用条款35所说的NVI方法，像下面这样：
+
+
+
+```c++
+class Shape
+{
+public:
+    void DrawShape(MyColor color = RED)
+    {
+        Draw(color);
+    }
+private:
+    virtual void Draw(MyColor color) const = 0
+    {
+        cout << "Shape::Draw" << endl;
+    }
+};
+
+class Rectangle: public Shape
+{
+private:
+    void Draw(MyColor color) const
+    {
+        cout << "Rectangle::Draw" << endl;
+    }
+};
+
+class Triangle : public Shape
+{
+private:
+    void Draw(MyColor color) const
+    {
+        cout << "Triangle::Draw" << endl;
+    }
+};
+
+
+int main()
+{
+    Shape *sr = new Rectangle();
+    Shape *st = new Triangle();
+    cout << "sr->DrawRectangle() = "; // Rectangle::Draw
+    sr->DrawShape();
+    cout << "st->DrawTriangle() = "; // Triangle::Draw
+    st->DrawShape();
+    delete sr;
+    delete st;
+}
+```
+
+
+
+因为前面条款已经约定non-virtual函数不会被覆写，所以这样就不用担心在子类中出现定义不同缺省形参值的问题了。
+
+最后总结一下：
+
+**绝对不要重新定义一个继承而来的缺省参数值，因为缺省参数值都是静态绑定，而virtual函数——你唯一应该覆写的东西——却是动态绑定。**
+
+
+
+### Item 38: Model "has-a" or "is-implemented-in-terms-of" through composition
+
+
+### Item 39: Use private inheritance judiciously
+
+### Item 40: Use multiple inheritance judiciously
